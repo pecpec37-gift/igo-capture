@@ -108,7 +108,8 @@
     position:absolute; width:11%; height:11%;
     transform:translate(-50%,-50%);
     display:flex; align-items:center; justify-content:center;
-    background:transparent; border:none; padding:0; cursor:pointer;
+    background:transparent; border:none; padding:0;
+    pointer-events:none;            /* クリックは盤全体で受け取る */
   }
   .stone{
     width:88%; height:88%; border-radius:50%;
@@ -535,19 +536,30 @@ function buildBoard(){
     s.style.left=(first+gap*c)+'%'; s.style.top=(first+gap*r)+'%';
     el.appendChild(s);
   }
-  // 交点セル（タップ領域）
+  // 交点セル（石を置く器。クリックは盤全体で受ける）
   cellEls = [];
   for(let r=0;r<N;r++){
     cellEls.push([]);
     for(let c=0;c<N;c++){
-      const b=document.createElement('button');
+      const b=document.createElement('div');
       b.className='cell';
       b.style.left=(first+gap*c)+'%'; b.style.top=(first+gap*r)+'%';
-      b.addEventListener('click', ()=>onCellClick(r,c));
       el.appendChild(b);
       cellEls[r].push(b);
     }
   }
+
+  // 盤全体で1回だけクリックを受け、押された位置から最も近い交点を計算する
+  el.addEventListener('click', (e)=>{
+    const rect = el.getBoundingClientRect();
+    if(rect.width===0) return;
+    const x = (e.clientX - rect.left) / rect.width  * 100; // ％
+    const y = (e.clientY - rect.top ) / rect.height * 100;
+    const cc = Math.round((x - first) / gap);
+    const rr = Math.round((y - first) / gap);
+    if(rr<0 || rr>=N || cc<0 || cc>=N) return;
+    onCellClick(rr, cc);
+  });
 }
 
 let cellEls = [];
