@@ -173,6 +173,14 @@
       <label>白（コンピュータ）は何個取ったら勝ち？</label>
       <select id="selWhite"></select>
     </div>
+    <div class="row">
+      <label>コンピュータの強さ</label>
+      <select id="selLevel">
+        <option value="1">よわい</option>
+        <option value="2">ふつう</option>
+        <option value="3" selected>つよい</option>
+      </select>
+    </div>
     <button class="btn-start" id="btnStart">対局開始</button>
     <div class="note">
       ・石取りゲームです。相手の石を囲んで取り、決めた数だけ取ったら勝ちです。<br>
@@ -326,98 +334,161 @@ function tryMove(b,r,c,color,ko){
 
 /* =========================================================
    コンピュータ（白）の思考
+   ・数手先まで読む αβ 探索
+   ・シチョウ（取られる筋）の読み
+   ・同点級の手からランダム選択でワンパターンを回避
    ========================================================= */
-function cpuMove(){
-  const legal = [];
+let cpuDepth = 3;          // 読みの深さ（強さ）。1=よわい 2=ふつう 3=つよい
+const NODE_LIMIT = 60000;  // 保険：これを超えたら探索を打ち切る
+const LADDER_MAX = 40;     // シチョウ読みの上限
+let nodeCount = 0;
+
+/* 連の呼吸点（座標のリスト）*/
+function libsListG(b,grp){
+  const s = new Map();
+  for(const [y,x] of grp){
+    for(const [dy,dx] of NB){
+      const ny=y+dy, nx=x+dx;
+      if(inB(ny,nx) && b[ny][nx]===EMPTY) s.set(idxOf(ny,nx),[ny,nx]);
+    }
+  }
+  return [...s.values()];
+}
+
+/* シチョウ判定：(r,c) を含む連（アタリの側）が逃げても取られるか */
+function ladderCaptured(b,r,c,d){
+  if(d>LADDER_MAX) return false;          // 読み切れない→安全側で逃げ切り扱い
+  const defender = b[r][c];
+  if(defender===EMPTY) return true;       // すでに取られている
+  const attacker = (defender===BLACK)?WHITE:BLACK;
+  const g = group(b,r,c);
+  const Ls = libsListG(b,g);
+  if(Ls.length>=2) return false;          // アタリではない
+  if(Ls.length===0) return true;
+  const [er,ec] = Ls[0];
+  const run = tryMove(b,er,ec,defender,null);   // 逃げてみる
+  if(!run) return true;                    // 打てない（自殺）→取られる
+  const g2 = group(run.board,er,ec);
+  const l2 = libsListG(run.board,g2);
+  if(l2.length>=3) return false;           // 逃げ切り
+  if(l2.length<=1) return true;            // 逃げてもまだアタリ→取られる
+  // 呼吸点2つ：攻め手が続けば取られる
+  for(const [ar,ac] of l2){
+    const atk = tryMove(run.board,ar,ac,attacker,null);
+    if(!atk) continue;
+    let rep=null;
+    for(const [gy,gx] of g2){ if(atk.board[gy][gx]===defender){ rep=[gy,gx]; break; } }
+    if(!rep) return true;                  // 逃げた石が取られた
+    const dl = libCount(atk.board, group(atk.board,rep[0],rep[1]));
+    if(dl===1 && ladderCaptured(atk.board,rep[0],rep[1],d+1)) return true;
+  }
+  return false;                            // どう攻めても取れない→逃げ切り
+}
+
+/* 盤の評価（白から見た点数。プラスなら白有利）*/
+function evalWhite(b,cW,cB){
+  let s = 1000*(cW - cB);                  // 取った石差を最重視（1個=1000点）
+  const seen = new Set();
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
-      const mv = tryMove(board,r,c,CPU,koPoint);
-      if(mv) legal.push({r,c,mv});
+      const v=b[r][c];
+      if(v===EMPTY || seen.has(idxOf(r,c))) continue;
+      const g=group(b,r,c);
+      for(const p of g) seen.add(idxOf(p[0],p[1]));
+      const L=libCount(b,g);
+      const sign=(v===WHITE)?1:-1;         // 白の連は加点方向、黒の連は減点方向
+      if(L===1){
+        const dead = ladderCaptured(b,g[0][0],g[0][1],0);
+        const val = dead ? 30*g.length : 8*g.length;  // 取られ確定ならより大きく
+        s -= sign*val;
+      }else{
+        s += sign * Math.min(L,4) * 1.5;   // 呼吸点が多い連は安全
+      }
     }
   }
-  if(!legal.length) return null;
-  let best=null, bestScore=-1e18;
-  for(const L of legal){
-    const s = scoreMove(L.r,L.c,L.mv);
-    if(s>bestScore){ bestScore=s; best=L; }
-  }
-  return best;
-}
-
-function scoreMove(r,c,mv){
-  const nb = mv.board;
-  let s = 0;
-
-  /* 相手（黒）の石を取る手は最優先 */
-  s += mv.captured.length * 90;
-  if(capW + mv.captured.length >= targetW) s += 1e7; // これで勝てるなら即決
-
-  /* 自分の連の安全度 */
-  const mySize = mv.myGroupSize, myL = mv.myLibs;
-  if(myL===1 && mv.captured.length===0) s -= (45 + 12*mySize); // 自らアタリは悪手
-  s += myL * 2;
-
-  /* アタリの自分の連を助ける手はプラス */
-  s += rescueBonus(nb);
-
-  /* 相手（黒）をアタリに追い込む手はプラス */
-  s += atariBonus(nb);
-
-  /* 中央・接触への軽いボーナス */
-  s += contactCenterBonus(r,c);
-
-  s += Math.random()*2; // 変化をつける
   return s;
 }
 
-/* 現在アタリの白の連が、この手で助かるか */
-function rescueBonus(nb){
-  let bonus = 0;
-  const seen = new Set();
-  for(let y=0;y<N;y++){
-    for(let x=0;x<N;x++){
-      if(board[y][x]===CPU && !seen.has(idxOf(y,x))){
-        const g = group(board,y,x);
-        for(const p of g) seen.add(idxOf(p[0],p[1]));
-        if(libCount(board,g)===1){
-          let rep=null;
-          for(const [gy,gx] of g){ if(nb[gy][gx]===CPU){ rep=[gy,gx]; break; } }
-          if(rep){
-            const l2 = libCount(nb, group(nb,rep[0],rep[1]));
-            if(l2>=2) bonus += 60 + 12*g.length;
-          }
+/* 探索対象の候補手を作る（石の近くに限定して高速化）*/
+function genCandidates(b,color,ko){
+  const near = [];
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      if(b[r][c]!==EMPTY) continue;
+      let ok=false;
+      for(let dr=-2;dr<=2 && !ok;dr++){
+        for(let dc=-2;dc<=2;dc++){
+          const y=r+dr, x=c+dc;
+          if(inB(y,x) && b[y][x]!==EMPTY){ ok=true; break; }
         }
       }
+      if(!ok) continue;
+      const mv=tryMove(b,r,c,color,ko);
+      if(!mv) continue;
+      const q = quickScore(b,r,c,mv);
+      near.push({r,c,mv,cap:mv.captured.length,q});
     }
   }
-  return bonus;
+  near.sort((a,z)=>z.q-a.q);          // 良さそうな手から並べる（αβが効きやすい）
+  return near.slice(0,24);            // 分岐を抑える
 }
 
-/* この手のあと、黒の連をいくつアタリにできたか */
-function atariBonus(nb){
-  let b = 0;
-  const seen = new Set();
-  for(let y=0;y<N;y++){
-    for(let x=0;x<N;x++){
-      if(nb[y][x]===BLACK && !seen.has(idxOf(y,x))){
-        const g = group(nb,y,x);
-        for(const p of g) seen.add(idxOf(p[0],p[1]));
-        if(libCount(nb,g)===1) b += 10 + 3*g.length;
-      }
-    }
-  }
-  return b;
-}
-
-function contactCenterBonus(r,c){
-  const center = (N-1)/2;
-  let s = (4 - Math.max(Math.abs(r-center), Math.abs(c-center))) * 0.6;
-  for(const [dy,dx] of NB){
-    const ny=r+dy, nx=c+dx;
-    if(inB(ny,nx) && board[ny][nx]!==EMPTY){ s += 1.2; break; }
-  }
+function quickScore(b,r,c,mv){
+  let s = mv.captured.length*120;
+  if(mv.myLibs===1 && mv.captured.length===0) s -= 40; // 自らアタリ
+  s += mv.myLibs;
+  const center=(N-1)/2;
+  s += (4-Math.max(Math.abs(r-center),Math.abs(c-center)))*0.6;
   return s;
 }
+
+/* αβ探索（白は最大化、黒は最小化）*/
+function search(b,color,cW,cB,depth,alpha,beta,ko){
+  if(cW>=targetW) return  100000+depth;   // 白の勝ち（早いほど高評価）
+  if(cB>=targetB) return -100000-depth;   // 黒の勝ち
+  if(depth===0 || nodeCount>NODE_LIMIT) return evalWhite(b,cW,cB);
+  const cands=genCandidates(b,color,ko);
+  if(!cands.length) return evalWhite(b,cW,cB);
+  if(color===WHITE){
+    let best=-Infinity;
+    for(const m of cands){
+      nodeCount++;
+      const v=search(m.mv.board,BLACK,cW+m.cap,cB,depth-1,alpha,beta,m.mv.ko);
+      if(v>best) best=v;
+      if(best>alpha) alpha=best;
+      if(alpha>=beta) break;
+    }
+    return best;
+  }else{
+    let best=Infinity;
+    for(const m of cands){
+      nodeCount++;
+      const v=search(m.mv.board,WHITE,cW,cB+m.cap,depth-1,alpha,beta,m.mv.ko);
+      if(v<best) best=v;
+      if(best<beta) beta=best;
+      if(alpha>=beta) break;
+    }
+    return best;
+  }
+}
+
+/* 実際に打つ手を選ぶ */
+function cpuMove(){
+  nodeCount=0;
+  const cands=genCandidates(board,CPU,koPoint);
+  if(!cands.length) return null;
+  let bestV=-Infinity;
+  for(const m of cands){
+    const v=search(m.mv.board,HUMAN,capW+m.cap,capB,cpuDepth-1,-Infinity,Infinity,m.mv.ko);
+    m._v=v;
+    if(v>bestV) bestV=v;
+  }
+  // 評価がほぼ同点の手からランダムに選び、ワンパターンを避ける
+  const pool=cands.filter(m=>m._v>=bestV-6);
+  const pick=pool[Math.floor(Math.random()*pool.length)] || cands[0];
+  return {r:pick.r, c:pick.c, mv:pick.mv};
+}
+
 
 /* =========================================================
    着手の適用・勝敗判定
@@ -608,6 +679,7 @@ function showToast(msg){
 function startGame(){
   targetB = parseInt(document.getElementById('selBlack').value,10);
   targetW = parseInt(document.getElementById('selWhite').value,10);
+  cpuDepth = parseInt(document.getElementById('selLevel').value,10);
   board = newBoard();
   turn = HUMAN; koPoint = null; gameOver = false;
   capB = 0; capW = 0; placedB = 0; placedW = 0;
