@@ -411,6 +411,21 @@ function evalWhite(b,cW,cB){
 
 /* 探索対象の候補手を作る（石の近くに限定して高速化）*/
 function genCandidates(b,color,ko,limit){
+  // アタリの自分の連（シチョウでなく逃げ切れるもの）の呼吸点＝救援点を先に洗い出す
+  const rescue = new Set();
+  const seenG = new Set();
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      if(b[r][c]===color && !seenG.has(idxOf(r,c))){
+        const g=group(b,r,c);
+        for(const p of g) seenG.add(idxOf(p[0],p[1]));
+        const ls=libsListG(b,g);
+        if(ls.length===1 && !ladderCaptured(b,r,c,0)){
+          rescue.add(idxOf(ls[0][0], ls[0][1]));
+        }
+      }
+    }
+  }
   const near = [];
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
@@ -425,7 +440,8 @@ function genCandidates(b,color,ko,limit){
       if(!ok) continue;
       const mv=tryMove(b,r,c,color,ko);
       if(!mv) continue;
-      const q = quickScore(b,r,c,mv);
+      let q = quickScore(b,r,c,mv);
+      if(rescue.has(idxOf(r,c)) && mv.myLibs>=2) q += 130; // 逃げれば助かるアタリの救援手
       near.push({r,c,mv,cap:mv.captured.length,q});
     }
   }
