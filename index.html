@@ -178,7 +178,7 @@
       <select id="selLevel">
         <option value="1">よわい</option>
         <option value="2">ふつう</option>
-        <option value="3" selected>つよい</option>
+        <option value="4" selected>つよい</option>
       </select>
     </div>
     <button class="btn-start" id="btnStart">対局開始</button>
@@ -338,7 +338,7 @@ function tryMove(b,r,c,color,ko){
    ・シチョウ（取られる筋）の読み
    ・同点級の手からランダム選択でワンパターンを回避
    ========================================================= */
-let cpuDepth = 3;          // 読みの深さ（強さ）。1=よわい 2=ふつう 3=つよい
+let cpuDepth = 4;          // 読みの深さ（強さ）。1=よわい 2=ふつう 4=つよい
 const NODE_LIMIT = 60000;  // 保険：これを超えたら探索を打ち切る
 const LADDER_MAX = 40;     // シチョウ読みの上限
 let nodeCount = 0;
@@ -410,7 +410,7 @@ function evalWhite(b,cW,cB){
 }
 
 /* 探索対象の候補手を作る（石の近くに限定して高速化）*/
-function genCandidates(b,color,ko){
+function genCandidates(b,color,ko,limit){
   const near = [];
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
@@ -430,7 +430,7 @@ function genCandidates(b,color,ko){
     }
   }
   near.sort((a,z)=>z.q-a.q);          // 良さそうな手から並べる（αβが効きやすい）
-  return near.slice(0,24);            // 分岐を抑える
+  return near.slice(0, limit||24);    // 分岐を抑える
 }
 
 function quickScore(b,r,c,mv){
@@ -447,7 +447,8 @@ function search(b,color,cW,cB,depth,alpha,beta,ko){
   if(cW>=targetW) return  100000+depth;   // 白の勝ち（早いほど高評価）
   if(cB>=targetB) return -100000-depth;   // 黒の勝ち
   if(depth===0 || nodeCount>NODE_LIMIT) return evalWhite(b,cW,cB);
-  const cands=genCandidates(b,color,ko);
+  const limit = 8 + depth*4;              // 浅い枝ほど広く、深い枝は絞る
+  const cands=genCandidates(b,color,ko,limit);
   if(!cands.length) return evalWhite(b,cW,cB);
   if(color===WHITE){
     let best=-Infinity;
@@ -696,7 +697,7 @@ function init(){
   // 勝利条件の選択肢（1〜20個）
   const selB=document.getElementById('selBlack');
   const selW=document.getElementById('selWhite');
-  for(let i=1;i<=20;i++){
+  for(let i=1;i<=10;i++){
     const o1=document.createElement('option'); o1.value=i; o1.textContent=i+'個'; selB.appendChild(o1);
     const o2=document.createElement('option'); o2.value=i; o2.textContent=i+'個'; selW.appendChild(o2);
   }
