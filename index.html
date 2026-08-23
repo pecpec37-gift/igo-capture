@@ -231,12 +231,12 @@
       <div class="score black">
         <div class="who">あなた（黒）</div>
         <div class="num" id="capBlack">0</div>
-        <div class="goal" id="goalBlack">勝利まで 5個</div>
+        <div class="goal" id="goalBlack">勝利まで 2個</div>
       </div>
       <div class="score white">
         <div class="who">コンピュータ（白）</div>
         <div class="num" id="capWhite">0</div>
-        <div class="goal" id="goalWhite">勝利まで 5個</div>
+        <div class="goal" id="goalWhite">勝利まで 2個</div>
       </div>
     </div>
     <div class="turn you" id="turnText">あなたの番です</div>
@@ -859,7 +859,7 @@ function init(){
     const o1=document.createElement('option'); o1.value=i; o1.textContent=i+'個'; selB.appendChild(o1);
     const o2=document.createElement('option'); o2.value=i; o2.textContent=i+'個'; selW.appendChild(o2);
   }
-  selB.value='5'; selW.value='5';
+  selB.value='2'; selW.value='2';
 
   buildBoard();
 
