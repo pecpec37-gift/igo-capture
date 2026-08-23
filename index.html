@@ -156,6 +156,41 @@
     z-index:60;
   }
   #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  /* ===== 検討（棋譜再生）===== */
+  .btn-review{background:var(--portal); width:100%; margin-bottom:8px;}
+  .btn-review:hover{background:var(--portal2);}
+  #reviewArea{display:none; margin-top:12px;}
+  #gameScreen.reviewing .scorebar,
+  #gameScreen.reviewing .turn,
+  #gameScreen.reviewing .actions{display:none;}
+  #gameScreen.reviewing #reviewArea{display:block;}
+  .review-status{
+    text-align:center; font-weight:700; margin:10px 0; min-height:1.3em; color:#dfe4ea;
+  }
+  .review-nav{display:flex; gap:6px; justify-content:center; margin-bottom:10px;}
+  .review-nav button{
+    flex:1; background:var(--panel2); color:var(--text);
+    padding:11px 0; font-size:1rem; border-radius:10px;
+  }
+  .review-nav button:disabled{opacity:.35;}
+  .review-nav .play{background:var(--accent); max-width:110px;}
+  .review-nav .play:hover{background:var(--accent2);}
+  #kifuList{
+    max-height:160px; overflow-y:auto; background:var(--panel2);
+    border-radius:10px; padding:6px; margin-bottom:12px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .kifu-row{
+    display:flex; gap:8px; padding:7px 8px; border-radius:6px;
+    font-size:.92rem; cursor:pointer;
+  }
+  .kifu-row:hover{background:rgba(255,255,255,.06);}
+  .kifu-row.active{background:var(--portal); color:#fff;}
+  .kifu-no{width:2.2em; color:#9aa3ad; text-align:right;}
+  .kifu-row.active .kifu-no{color:#e8eefc;}
+  .review-actions{display:flex; gap:8px;}
+  .review-actions .btn-again{flex:1;}
 </style>
 </head>
 <body>
@@ -216,6 +251,23 @@
       <button class="btn-quit" id="btnQuit">対局をやめる</button>
       <a class="btn-portal" style="flex:1;" href="https://pecpec37-gift.github.io/portal/">Tommy-Goへ戻る</a>
     </div>
+
+    <!-- 検討（棋譜再生）エリア -->
+    <div id="reviewArea">
+      <div class="review-status" id="reviewStatus"></div>
+      <div class="review-nav">
+        <button id="rvFirst" title="最初へ">⏮</button>
+        <button id="rvPrev"  title="1手戻る">◀</button>
+        <button id="rvPlay" class="play" title="自動再生">▶ 再生</button>
+        <button id="rvNext"  title="1手進む">▶</button>
+        <button id="rvLast"  title="最後へ">⏭</button>
+      </div>
+      <div id="kifuList"></div>
+      <div class="review-actions">
+        <button class="btn-again" id="rvNewGame">新しい対局</button>
+        <a class="btn-portal" style="flex:1;" href="https://pecpec37-gift.github.io/portal/">Tommy-Goへ戻る</a>
+      </div>
+    </div>
   </div>
 
   <!-- ===== 結果オーバーレイ ===== -->
@@ -223,6 +275,7 @@
     <div class="box">
       <div class="result" id="resultText">あなたの勝ちです</div>
       <div class="detail" id="resultDetail"></div>
+      <button class="btn-review" id="btnReview">棋譜を見る・検討する</button>
       <button class="btn-again" id="btnAgain">もう一度</button>
       <a class="btn-portal" style="width:100%;" href="https://pecpec37-gift.github.io/portal/">Tommy-Goへ戻る</a>
     </div>
@@ -262,6 +315,11 @@ let placedB, placedW;  // 打った石の数
 let targetB, targetW;  // 勝利条件
 let lastMove;          // 直前に打った位置
 let busy;              // CPU思考中などの入力ロック
+let history;           // 棋譜（各手 {color,r,c,cap}）。対局ごとにリセット
+let positions;         // 各手後の盤面スナップショット（positions[0]=初期配置）
+let reviewMode;        // 検討モードか
+let reviewIndex;       // 検討中に表示している手数
+let autoTimer = null;  // 自動再生のタイマー
 
 /* --- 盤ユーティリティ --- */
 function idxOf(r,c){ return r*N + c; }
@@ -516,6 +574,8 @@ function applyMove(mv,color){
   // lastMove は呼び出し側で着手点をセット済み
   if(color===BLACK){ capB += mv.captured.length; placedB++; }
   else            { capW += mv.captured.length; placedW++; }
+  history.push({color, r:lastMove.r, c:lastMove.c, cap:mv.captured.length});
+  positions.push(cloneBoard(board));
   render();
 
   if(color===BLACK && capB>=targetB){ endGame('you');  return true; }
@@ -583,6 +643,7 @@ function endGame(kind){
   }
   rd.innerHTML = 'あなた（黒）が取った石：' + capB + ' 個<br>'
                + 'コンピュータ（白）が取った石：' + capW + ' 個';
+  document.getElementById('btnReview').style.display = history.length>0 ? 'block' : 'none';
   document.getElementById('overlay').style.display = 'flex';
 }
 
@@ -652,14 +713,14 @@ function buildBoard(){
 
 let cellEls = [];
 
-function render(){
+/* 任意の盤面を描画（直前手 last に印）。対局・検討の両方で使う */
+function drawStones(bd, last){
   for(let r=0;r<N;r++){
     for(let c=0;c<N;c++){
       const cell = cellEls[r][c];
-      const v = board[r][c];
+      const v = bd[r][c];
       if(v===EMPTY){ cell.innerHTML=''; continue; }
-      const isLast = lastMove && lastMove.r===r && lastMove.c===c;
-      // 既に同じ状態なら作り直さない（無駄なアニメ防止）
+      const isLast = last && last.r===r && last.c===c;
       const cur = cell.firstChild;
       const wantClass = 'stone ' + (v===BLACK?'black':'white') + (isLast?' last':'');
       if(cur && cur.className===wantClass) continue;
@@ -669,6 +730,10 @@ function render(){
       cell.appendChild(st);
     }
   }
+}
+
+function render(){
+  drawStones(board, lastMove);
   document.getElementById('capBlack').textContent = capB;
   document.getElementById('capWhite').textContent = capW;
   document.getElementById('goalBlack').textContent = '勝利まで ' + targetB + '個';
@@ -681,13 +746,85 @@ function updateTurn(){
   else            { t.textContent='コンピュータが考えています…'; t.className='turn cpu'; }
 }
 
-/* トースト */
-let toastTimer=null;
-function showToast(msg){
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>t.classList.remove('show'),1600);
+/* =========================================================
+   棋譜の確認・検討（対局後）
+   ========================================================= */
+function coordName(r,c){
+  const cols="ABCDEFGHJ";        // 9路は I を飛ばすのが慣例
+  return cols[c] + (r+1);
+}
+
+function enterReview(){
+  document.getElementById('overlay').style.display='none';
+  reviewMode = true;
+  document.getElementById('gameScreen').classList.add('reviewing');
+  buildKifu();
+  gotoIndex(positions.length-1);   // まず最終局面を表示
+}
+
+function buildKifu(){
+  const list=document.getElementById('kifuList');
+  list.innerHTML='';
+  if(history.length===0){
+    list.innerHTML='<div class="kifu-row"><span>（着手はありません）</span></div>';
+    return;
+  }
+  history.forEach((h,i)=>{
+    const row=document.createElement('div');
+    row.className='kifu-row'; row.dataset.idx=String(i+1);
+    const mark = h.color===BLACK?'●':'○';
+    const who  = h.color===BLACK?'黒':'白';
+    const capTxt = h.cap ? ' ×'+h.cap : '';
+    row.innerHTML='<span class="kifu-no">'+(i+1)+'.</span><span>'+mark+' '+who+' '+coordName(h.r,h.c)+capTxt+'</span>';
+    row.addEventListener('click',()=>{ stopAutoPlay(); gotoIndex(i+1); });
+    list.appendChild(row);
+  });
+}
+
+function gotoIndex(idx){
+  reviewIndex = Math.max(0, Math.min(positions.length-1, idx));
+  const last = reviewIndex>0 ? history[reviewIndex-1] : null;
+  drawStones(positions[reviewIndex], last);
+  updateReviewUI();
+}
+
+function updateReviewUI(){
+  const total = positions.length-1;   // 総手数
+  const st=document.getElementById('reviewStatus');
+  if(reviewIndex===0){
+    st.textContent='対局開始前（黒2・白2 の配置）';
+  }else{
+    const h=history[reviewIndex-1];
+    const who=h.color===BLACK?'黒':'白';
+    const cap=h.cap ? '　'+(h.color===BLACK?'白':'黒')+h.cap+'子を取る' : '';
+    st.textContent = reviewIndex+' / '+total+'手目　'+who+' '+coordName(h.r,h.c)+cap;
+  }
+  document.getElementById('rvFirst').disabled = reviewIndex===0;
+  document.getElementById('rvPrev').disabled  = reviewIndex===0;
+  document.getElementById('rvNext').disabled  = reviewIndex===total;
+  document.getElementById('rvLast').disabled  = reviewIndex===total;
+  const rows=document.querySelectorAll('#kifuList .kifu-row');
+  rows.forEach(r=>{
+    const on = parseInt(r.dataset.idx,10)===reviewIndex;
+    r.classList.toggle('active', on);
+    if(on && r.scrollIntoView) r.scrollIntoView({block:'nearest'});
+  });
+}
+
+function stopAutoPlay(){
+  if(autoTimer){ clearInterval(autoTimer); autoTimer=null; }
+  const b=document.getElementById('rvPlay');
+  if(b) b.textContent='▶ 再生';
+}
+
+function toggleAutoPlay(){
+  if(autoTimer){ stopAutoPlay(); return; }
+  if(reviewIndex>=positions.length-1) gotoIndex(0);   // 最後なら頭から
+  document.getElementById('rvPlay').textContent='⏸ 停止';
+  autoTimer=setInterval(()=>{
+    if(reviewIndex>=positions.length-1){ stopAutoPlay(); return; }
+    gotoIndex(reviewIndex+1);
+  }, 850);
 }
 
 /* =========================================================
@@ -701,6 +838,11 @@ function startGame(){
   turn = HUMAN; koPoint = null; gameOver = false;
   capB = 0; capW = 0; placedB = 0; placedW = 0;
   lastMove = null; busy = false;
+  history = [];
+  positions = [cloneBoard(board)];   // 初期配置を0手目として保存
+  reviewMode = false; reviewIndex = 0;
+  stopAutoPlay();
+  document.getElementById('gameScreen').classList.remove('reviewing');
   showScreen('game');
   render();
   updateTurn();
@@ -727,6 +869,19 @@ function init(){
   });
   document.getElementById('btnAgain').addEventListener('click', ()=>{
     document.getElementById('overlay').style.display='none';
+    showScreen('start');
+  });
+
+  // 検討（棋譜再生）
+  document.getElementById('btnReview').addEventListener('click', enterReview);
+  document.getElementById('rvFirst').addEventListener('click', ()=>{ stopAutoPlay(); gotoIndex(0); });
+  document.getElementById('rvPrev' ).addEventListener('click', ()=>{ stopAutoPlay(); gotoIndex(reviewIndex-1); });
+  document.getElementById('rvNext' ).addEventListener('click', ()=>{ stopAutoPlay(); gotoIndex(reviewIndex+1); });
+  document.getElementById('rvLast' ).addEventListener('click', ()=>{ stopAutoPlay(); gotoIndex(positions.length-1); });
+  document.getElementById('rvPlay' ).addEventListener('click', toggleAutoPlay);
+  document.getElementById('rvNewGame').addEventListener('click', ()=>{
+    stopAutoPlay();
+    document.getElementById('gameScreen').classList.remove('reviewing');
     showScreen('start');
   });
 
