@@ -511,16 +511,92 @@ function quickScore(b,r,c,mv){
   let s = mv.captured.length*120;
   if(mv.myLibs===1 && mv.captured.length===0) s -= 40; // 自らアタリ
   s += mv.myLibs;
+  // 攻めの手を評価＆候補に残す：相手をアタリにする手・呼吸点を詰める手
+  const me  = mv.board[r][c];
+  const opp = (me===BLACK)?WHITE:BLACK;
+  const nb  = mv.board;
+  const seenO = new Set();
+  for(const [dy,dx] of NB){
+    const ny=r+dy, nx=c+dx;
+    if(inB(ny,nx) && nb[ny][nx]===opp && !seenO.has(idxOf(ny,nx))){
+      const g=group(nb,ny,nx);
+      for(const p of g) seenO.add(idxOf(p[0],p[1]));
+      const l=libCount(nb,g);
+      if(l===1)      s += 60 + 8*g.length;   // 相手をアタリに（取り一歩手前）
+      else if(l===2) s += 10 + 2*g.length;   // 呼吸点を2まで詰める
+    }
+  }
   const center=(N-1)/2;
   s += (4-Math.max(Math.abs(r-center),Math.abs(c-center)))*0.6;
   return s;
+}
+
+/* 「石を取る手」だけを生成（静止探索用）
+   ＝相手のアタリの連の、最後の呼吸点に打つ手 */
+function genCaptures(b,color,ko){
+  const opp = (color===WHITE)?BLACK:WHITE;
+  const seen = new Set();
+  const pts  = new Map();            // 打つと取れる点（重複排除）
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      if(b[r][c]===opp && !seen.has(idxOf(r,c))){
+        const g=group(b,r,c);
+        for(const p of g) seen.add(idxOf(p[0],p[1]));
+        const ls=libsListG(b,g);
+        if(ls.length===1) pts.set(idxOf(ls[0][0],ls[0][1]), ls[0]);
+      }
+    }
+  }
+  const res=[];
+  for(const [rr,cc] of pts.values()){
+    const mv=tryMove(b,rr,cc,color,ko);
+    if(mv && mv.captured.length>0) res.push({r:rr,c:cc,mv,cap:mv.captured.length});
+  }
+  res.sort((a,z)=>z.cap-a.cap);       // 多く取れる手から
+  return res;
+}
+
+const QMAX = 8;   // 静止探索の深さ上限
+/* 静止探索：末端で「取り合い」が落ち着くまで取る手だけを読む */
+function quiescence(b,color,cW,cB,alpha,beta,ko,qd){
+  if(cW>=targetW) return  100000;
+  if(cB>=targetB) return -100000;
+  const standPat = evalWhite(b,cW,cB);          // ここで打ち止めた場合の評価
+  if(qd>=QMAX || nodeCount>NODE_LIMIT) return standPat;
+  const caps = genCaptures(b,color,ko);
+  if(color===WHITE){
+    if(standPat>=beta) return standPat;
+    if(standPat>alpha) alpha=standPat;
+    let best=standPat;
+    for(const m of caps){
+      nodeCount++;
+      const v=quiescence(m.mv.board,BLACK,cW+m.cap,cB,alpha,beta,m.mv.ko,qd+1);
+      if(v>best) best=v;
+      if(best>alpha) alpha=best;
+      if(alpha>=beta) break;
+    }
+    return best;
+  }else{
+    if(standPat<=alpha) return standPat;
+    if(standPat<beta) beta=standPat;
+    let best=standPat;
+    for(const m of caps){
+      nodeCount++;
+      const v=quiescence(m.mv.board,WHITE,cW,cB+m.cap,alpha,beta,m.mv.ko,qd+1);
+      if(v<best) best=v;
+      if(best<beta) beta=best;
+      if(alpha>=beta) break;
+    }
+    return best;
+  }
 }
 
 /* αβ探索（白は最大化、黒は最小化）*/
 function search(b,color,cW,cB,depth,alpha,beta,ko){
   if(cW>=targetW) return  100000+depth;   // 白の勝ち（早いほど高評価）
   if(cB>=targetB) return -100000-depth;   // 黒の勝ち
-  if(depth===0 || nodeCount>NODE_LIMIT) return evalWhite(b,cW,cB);
+  // 末端では即評価せず、取り合いが落ち着くまで読む（静止探索）
+  if(depth===0 || nodeCount>NODE_LIMIT) return quiescence(b,color,cW,cB,alpha,beta,ko,0);
   const limit = 8 + depth*4;              // 浅い枝ほど広く、深い枝は絞る
   const cands=genCandidates(b,color,ko,limit);
   if(!cands.length) return evalWhite(b,cW,cB);
